@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "snake-guard-poetry-example"
+version = "0.1.0"
+description = "Small Poetry-style project for snake-guard examples."
+authors = ["snake-guard <example@example.com>"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.10,<4.0"
+requests = ">=2.31,<3.0"
+flask = { version = ">=3.0,<4.0", extras = ["async"] }
+fastapi = "0.110.0"
+django = "2.2.24"
+annotated-doc = "^0.0.4"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
+

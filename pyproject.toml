@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "snake-guard"
+version = "0.1.0"
+description = "CLI dependency risk scanner for Python projects."
+license = "Apache-2.0"
+readme = "README.md"
+authors = [
+    { name = "Artemooon" }
+]
+requires-python = ">=3.10"
+dependencies = [
+  "guarddog>=2.0",
+  "packaging>=24",
+  "pip-audit>=2.7",
+  "tomli>=2.0; python_version < '3.10'",
+  "typer>=0.12,<1.0",
+]
+
+[project.scripts]
+snake-guard = "snake_guard.cli:app"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+include = ["snake_guard*"]

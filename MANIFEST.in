@@ -1,0 +1,16 @@
+include README.md
+include pyproject.toml
+
+recursive-include examples *.md *.txt *.toml *.lock *.sh
+
+prune .github
+prune .idea
+prune .venv
+prune build
+prune dist
+prune snake_guard.egg-info
+prune examples/*/venv
+
+global-exclude __pycache__/*
+global-exclude *.py[cod]
+global-exclude .DS_Store

@@ -1,0 +1,31 @@
+name: snake-guard
+
+on:
+  schedule:
+    - cron: "0 9 */3 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Scan Python dependencies
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install snake-guard
+        run: |
+          python -m pip install --upgrade pip
+          pip install snake-guard
+
+      - name: Scan dependencies
+        run: snake-guard scan --verify
