@@ -203,10 +203,12 @@ The installation wrapper can detect or run these package managers:
 - `poetry`
 - `uv`
 
-Automatic file edits are intentionally conservative. Today, `snake-guard fix`
-can update vulnerable direct dependencies in `requirements.txt` when a safe
-replacement is known. For Poetry and uv projects, it reports the plan and pinning
-recommendations without rewriting lock files.
+`snake-guard fix` can update vulnerable direct dependencies in `requirements.txt` or
+`pyproject.toml` when a safe replacement is known. For Poetry and uv projects,
+it rewrites the direct dependency specifier first, then runs `poetry lock` or
+`uv lock` so the checked-in lock file matches the manifest. Use
+`snake-guard fix --plan` to preview the manifest diff and the lock refresh
+command before editing files.
 
 ## Built With
 

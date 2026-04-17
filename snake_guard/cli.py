@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import itertools
 import os
+import shutil
 import sys
 import threading
 import time
@@ -14,8 +15,19 @@ import typer
 
 from snake_guard.installer import install_project
 from snake_guard.remediation import build_fix_plan
-from snake_guard.reporting import as_pretty_json, render_fix_text, render_install_text, render_sandbox_text, render_scan_text
-from snake_guard.sandbox import SandboxDockerOptions, exec_in_sandbox, probe_package, shell_in_sandbox
+from snake_guard.reporting import (
+    as_pretty_json,
+    render_fix_text,
+    render_install_text,
+    render_sandbox_text,
+    render_scan_text,
+)
+from snake_guard.sandbox import (
+    SandboxDockerOptions,
+    exec_in_sandbox,
+    probe_package,
+    shell_in_sandbox,
+)
 from snake_guard.service import scan_project
 
 app = typer.Typer(help="CLI dependency risk scanner for Python projects.")
@@ -34,10 +46,20 @@ def _resolve_root(root: Path) -> Path:
 )
 def install(
     ctx: typer.Context,
-    root: Path = typer.Option(Path("."), "--root", help="Project directory to install."),
-    manager: str = typer.Option("auto", "--manager", help="Installer backend: auto, pip, poetry, uv."),
-    requirement: Path | None = typer.Option(None, "--requirement", "-r", help="Requirements file for pip-style installs."),
-    package: list[str] = typer.Option(None, "--package", help="Package(s) to install directly, similar to pip install <pkg>."),
+    root: Path = typer.Option(
+        Path("."), "--root", help="Project directory to install."
+    ),
+    manager: str = typer.Option(
+        "auto", "--manager", help="Installer backend: auto, pip, poetry, uv."
+    ),
+    requirement: Path | None = typer.Option(
+        None, "--requirement", "-r", help="Requirements file for pip-style installs."
+    ),
+    package: list[str] = typer.Option(
+        None,
+        "--package",
+        help="Package(s) to install directly, similar to pip install <pkg>.",
+    ),
     sandbox_risky: bool = typer.Option(
         True,
         "--sandbox-risky/--skip-sandbox",
@@ -68,14 +90,20 @@ def install(
         "--dry-run",
         help="Print the install plan, including which packages would be sandboxed, without executing sandbox or install commands.",
     ),
-    sandbox_runtime: str = typer.Option("docker", "--sandbox-runtime", help="Container runtime for sandboxing."),
-    sandbox_image: str = typer.Option("python:3.11-slim", "--sandbox-image", help="Container image for sandboxing."),
+    sandbox_runtime: str = typer.Option(
+        "docker", "--sandbox-runtime", help="Container runtime for sandboxing."
+    ),
+    sandbox_image: str = typer.Option(
+        "python:3.11-slim", "--sandbox-image", help="Container image for sandboxing."
+    ),
     docker_arg: list[str] = typer.Option(
         None,
         "--docker-arg",
         help="Additional Docker run argument for sandbox runs. Repeat for multiple arguments.",
     ),
-    json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit JSON instead of text."
+    ),
 ) -> None:
     installer_args = list(ctx.args)
     progress = _ProgressDisplay()
@@ -110,7 +138,9 @@ def install(
     raise typer.Exit(code=_exit_code_for_install(report))
 
 
-@app.command(help="Scan project dependencies for vulnerabilities, malware signals, and provenance issues.")
+@app.command(
+    help="Scan project dependencies for vulnerabilities, malware signals, and provenance issues."
+)
 def scan(
     root: Path = typer.Option(Path("."), "--root", help="Project directory to scan."),
     verify_mode: bool = typer.Option(
@@ -123,7 +153,9 @@ def scan(
         "--include-transitive",
         help="Include transitive dependencies in the human-readable report. By default only direct dependencies are shown.",
     ),
-    json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit JSON instead of text."
+    ),
 ) -> None:
     progress = _ProgressDisplay()
     result = _run_with_spinner(
@@ -134,7 +166,11 @@ def scan(
     if verify_mode:
         suspicious = result.suspicious_packages()
         payload = {
-            "verified": not suspicious and not any(package.risk_level in {"high", "critical"} for package in result.packages),
+            "verified": not suspicious
+            and not any(
+                package.risk_level in {"high", "critical"}
+                for package in result.packages
+            ),
             "suspicious_packages": [package.to_dict() for package in suspicious],
             "packages": [package.to_dict() for package in result.packages],
             "issues": [issue.to_dict() for issue in result.issues],
@@ -152,44 +188,67 @@ def scan(
     raise typer.Exit(code=_exit_code_for_scan(result))
 
 
-@app.command(help="Update vulnerable direct dependencies in requirements.txt, or preview the exact diff with --plan.")
+@app.command(
+    help="Update vulnerable direct dependencies and refresh Poetry or uv lock files, or preview the exact diff with --plan."
+)
 def fix(
     root: Path = typer.Option(Path("."), "--root", help="Project directory to scan."),
-    plan: bool = typer.Option(False, "--plan", help="Preview the fix plan without editing files."),
+    plan: bool = typer.Option(
+        False, "--plan", help="Preview the fix plan without editing files."
+    ),
     include_transitive: bool = typer.Option(
         False,
         "--include-transitive",
         help="Include transitive dependency upgrade suggestions in the human-readable fix report.",
     ),
-    json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit JSON instead of text."
+    ),
 ) -> None:
     resolved_root = _resolve_root(root)
     progress = _ProgressDisplay()
-    result = _run_with_spinner(
-        "Scanning dependencies",
-        lambda: scan_project(resolved_root, progress_callback=progress.log),
-        progress,
-    )
-    fix_plan, diff = _run_with_spinner(
-        "Building remediation plan",
-        lambda: build_fix_plan(resolved_root, result, apply=not plan),
-    )
-    payload = {
-        "scan": result.to_dict(),
-        "fix_plan": fix_plan.to_dict(),
-        "diff": diff,
-    }
-    if json_output:
-        typer.echo(as_pretty_json(payload))
+    started_at = time.perf_counter()
+    try:
+        result = _run_with_spinner(
+            "Scanning dependencies",
+            lambda: scan_project(resolved_root, progress_callback=progress.log),
+            progress,
+        )
+        fix_plan, diff = _run_with_spinner(
+            "Building remediation plan",
+            lambda: build_fix_plan(
+                resolved_root, result, apply=not plan, progress_callback=progress.log
+            ),
+        )
+        payload = {
+            "scan": result.to_dict(),
+            "fix_plan": fix_plan.to_dict(),
+            "diff": diff,
+        }
+        if json_output:
+            typer.echo(as_pretty_json(payload))
+            raise typer.Exit(code=_exit_code_for_fix(fix_plan, result.engine_statuses))
+        typer.echo(
+            render_fix_text(
+                fix_plan,
+                diff,
+                include_transitive=include_transitive,
+                engine_statuses=result.engine_statuses,
+            )
+        )
         raise typer.Exit(code=_exit_code_for_fix(fix_plan, result.engine_statuses))
-    typer.echo(render_fix_text(fix_plan, diff, include_transitive=include_transitive, engine_statuses=result.engine_statuses))
-    raise typer.Exit(code=_exit_code_for_fix(fix_plan, result.engine_statuses))
+    finally:
+        _echo_elapsed_time(started_at)
 
 
 @sandbox_app.command("probe")
 def sandbox_probe(
-    package: str = typer.Argument(..., help="Package name or requirement specifier to sandbox."),
-    root: Path = typer.Option(Path("."), "--root", help="Project directory used for risk gating."),
+    package: str = typer.Argument(
+        ..., help="Package name or requirement specifier to sandbox."
+    ),
+    root: Path = typer.Option(
+        Path("."), "--root", help="Project directory used for risk gating."
+    ),
     force: bool = typer.Option(
         False,
         "--force/--respect-policy",
@@ -205,17 +264,29 @@ def sandbox_probe(
         "--pull-image/--no-pull-image",
         help="Pull the container image when it is missing locally.",
     ),
-    image: str = typer.Option("python:3.11-slim", "--image", help="Container image to use."),
-    runtime: str = typer.Option("docker", "--runtime", help="Container runtime executable."),
+    image: str = typer.Option(
+        "python:3.11-slim", "--image", help="Container image to use."
+    ),
+    runtime: str = typer.Option(
+        "docker", "--runtime", help="Container runtime executable."
+    ),
     docker_arg: list[str] = typer.Option(
         None,
         "--docker-arg",
         help="Additional Docker run argument. Repeat for multiple arguments.",
     ),
-    json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
-    save_report: Path | None = typer.Option(None, "--save-report", help="Optional path to write the JSON report."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit JSON instead of text."
+    ),
+    save_report: Path | None = typer.Option(
+        None, "--save-report", help="Optional path to write the JSON report."
+    ),
 ) -> None:
-    report_path = _validate_output_file(save_report, "--save-report") if save_report is not None else None
+    report_path = (
+        _validate_output_file(save_report, "--save-report")
+        if save_report is not None
+        else None
+    )
     progress = _ProgressDisplay()
     report = _run_with_spinner(
         f"Sandboxing {package}",
@@ -240,11 +311,17 @@ def sandbox_probe(
     raise typer.Exit(code=_exit_code_for_sandbox(report))
 
 
-@sandbox_app.command("exec", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+@sandbox_app.command(
+    "exec", context_settings={"allow_extra_args": True, "ignore_unknown_options": True}
+)
 def sandbox_exec(
     ctx: typer.Context,
-    package: str = typer.Argument(..., help="Package name or requirement specifier to sandbox."),
-    root: Path = typer.Option(Path("."), "--root", help="Project directory used for risk gating."),
+    package: str = typer.Argument(
+        ..., help="Package name or requirement specifier to sandbox."
+    ),
+    root: Path = typer.Option(
+        Path("."), "--root", help="Project directory used for risk gating."
+    ),
     force: bool = typer.Option(
         False,
         "--force/--respect-policy",
@@ -260,8 +337,12 @@ def sandbox_exec(
         "--pull-image/--no-pull-image",
         help="Pull the container image when it is missing locally.",
     ),
-    image: str = typer.Option("python:3.11-slim", "--image", help="Container image to use."),
-    runtime: str = typer.Option("docker", "--runtime", help="Container runtime executable."),
+    image: str = typer.Option(
+        "python:3.11-slim", "--image", help="Container image to use."
+    ),
+    runtime: str = typer.Option(
+        "docker", "--runtime", help="Container runtime executable."
+    ),
     docker_arg: list[str] = typer.Option(
         None,
         "--docker-arg",
@@ -269,7 +350,9 @@ def sandbox_exec(
     ),
 ) -> None:
     if not ctx.args:
-        raise typer.BadParameter("Provide a command after `--`, for example: snake-guard sandbox exec Django -- python -c 'import django'")
+        raise typer.BadParameter(
+            "Provide a command after `--`, for example: snake-guard sandbox exec Django -- python -c 'import django'"
+        )
     exit_code = exec_in_sandbox(
         _resolve_root(root),
         package,
@@ -286,8 +369,12 @@ def sandbox_exec(
 
 @sandbox_app.command("shell")
 def sandbox_shell(
-    package: str = typer.Argument(..., help="Package name or requirement specifier to sandbox."),
-    root: Path = typer.Option(Path("."), "--root", help="Project directory used for risk gating."),
+    package: str = typer.Argument(
+        ..., help="Package name or requirement specifier to sandbox."
+    ),
+    root: Path = typer.Option(
+        Path("."), "--root", help="Project directory used for risk gating."
+    ),
     force: bool = typer.Option(
         False,
         "--force/--respect-policy",
@@ -303,9 +390,15 @@ def sandbox_shell(
         "--pull-image/--no-pull-image",
         help="Pull the container image when it is missing locally.",
     ),
-    image: str = typer.Option("python:3.11-slim", "--image", help="Container image to use."),
-    runtime: str = typer.Option("docker", "--runtime", help="Container runtime executable."),
-    shell: str = typer.Option("/bin/sh", "--shell", help="Shell binary to launch inside the sandbox."),
+    image: str = typer.Option(
+        "python:3.11-slim", "--image", help="Container image to use."
+    ),
+    runtime: str = typer.Option(
+        "docker", "--runtime", help="Container runtime executable."
+    ),
+    shell: str = typer.Option(
+        "/bin/sh", "--shell", help="Shell binary to launch inside the sandbox."
+    ),
     docker_arg: list[str] = typer.Option(
         None,
         "--docker-arg",
@@ -358,7 +451,9 @@ def _exit_code_for_install(report) -> int:
     return 0 if report.succeeded() else 1
 
 
-def _run_with_spinner(message: str, action: Callable[[], T], progress: "_ProgressDisplay | None" = None) -> T:
+def _run_with_spinner(
+    message: str, action: Callable[[], T], progress: "_ProgressDisplay | None" = None
+) -> T:
     with _spinner(message, progress):
         return action()
 
@@ -370,15 +465,23 @@ def _sandbox_docker_options(docker_args: list[str] | None) -> SandboxDockerOptio
 def _validate_output_file(path: Path, option_name: str) -> Path:
     expanded_path = path.expanduser()
     if expanded_path.exists() and expanded_path.is_dir():
-        raise typer.BadParameter(f"{option_name} must be a file path, not a directory: {expanded_path}")
+        raise typer.BadParameter(
+            f"{option_name} must be a file path, not a directory: {expanded_path}"
+        )
 
     parent = expanded_path.parent if expanded_path.parent != Path("") else Path(".")
     if not parent.exists():
-        raise typer.BadParameter(f"{option_name} parent directory does not exist: {parent}")
+        raise typer.BadParameter(
+            f"{option_name} parent directory does not exist: {parent}"
+        )
     if not parent.is_dir():
-        raise typer.BadParameter(f"{option_name} parent path is not a directory: {parent}")
+        raise typer.BadParameter(
+            f"{option_name} parent path is not a directory: {parent}"
+        )
     if not os.access(parent, os.W_OK):
-        raise typer.BadParameter(f"{option_name} parent directory is not writable: {parent}")
+        raise typer.BadParameter(
+            f"{option_name} parent directory is not writable: {parent}"
+        )
     if expanded_path.exists() and not os.access(expanded_path, os.W_OK):
         raise typer.BadParameter(f"{option_name} file is not writable: {expanded_path}")
     return expanded_path
@@ -388,7 +491,9 @@ def _write_json_report(path: Path, payload: dict, option_name: str) -> None:
     try:
         path.write_text(as_pretty_json(payload), encoding="utf-8")
     except OSError as exc:
-        raise typer.BadParameter(f"failed to write {option_name} file {path}: {exc}") from exc
+        raise typer.BadParameter(
+            f"failed to write {option_name} file {path}: {exc}"
+        ) from exc
 
 
 @contextmanager
@@ -400,18 +505,10 @@ def _spinner(message: str, progress: "_ProgressDisplay | None" = None):
             if stop_event.is_set():
                 break
             status = progress.status_text() if progress is not None else ""
-            line = f"\r{frame} {message}"
-            if status:
-                line += f" [{status}]"
-            line += "..."
-            sys.stderr.write(line)
+            sys.stderr.write("\r" + _spinner_line(frame, message, status))
             sys.stderr.flush()
             time.sleep(0.1)
-        sys.stderr.write("\r")
-        width = len(message) + 8
-        if progress is not None:
-            width += len(progress.status_text()) + 3
-        sys.stderr.write(" " * width)
+        sys.stderr.write("\r" + " " * _terminal_width())
         sys.stderr.write("\r")
         sys.stderr.flush()
 
@@ -458,26 +555,42 @@ class _ProgressDisplay:
         for engine_name, label in scan_labels.items():
             if message == f"{engine_name}: completed":
                 self._completed_scan_engines.add(engine_name)
-                remaining = [name for name in scan_labels if name not in self._completed_scan_engines]
+                remaining = [
+                    name
+                    for name in scan_labels
+                    if name not in self._completed_scan_engines
+                ]
                 if remaining:
-                    remaining_labels = ", ".join(scan_labels[name] for name in remaining)
+                    remaining_labels = ", ".join(
+                        scan_labels[name] for name in remaining
+                    )
                     return f"loading remaining checks: {remaining_labels}"
                 return "completing scan"
             if message == f"{engine_name}: started":
-                remaining = [name for name in scan_labels if name != engine_name and name not in self._completed_scan_engines]
+                remaining = [
+                    name
+                    for name in scan_labels
+                    if name != engine_name and name not in self._completed_scan_engines
+                ]
                 if remaining:
-                    remaining_labels = ", ".join(scan_labels[name] for name in remaining)
+                    remaining_labels = ", ".join(
+                        scan_labels[name] for name in remaining
+                    )
                     return f"running {label}; waiting on {remaining_labels}"
                 return f"running {label}"
         return ""
 
 
 def _summarize_progress(message: str) -> str:
+    if message.startswith("fix: "):
+        return message.removeprefix("fix: ")
     if message.startswith("inventory: found "):
         direct_count = message.split("inventory: found ", 1)[1].split(" direct", 1)[0]
         return f"found {direct_count} direct dependencies"
     if message.startswith("inventory: prepared "):
-        direct_count = message.split("inventory: prepared ", 1)[1].split(" direct", 1)[0]
+        direct_count = message.split("inventory: prepared ", 1)[1].split(" direct", 1)[
+            0
+        ]
         return f"prepared {direct_count} direct dependencies"
     if message.startswith("install: detecting manager"):
         return "detecting installer"
@@ -499,10 +612,26 @@ def _summarize_progress(message: str) -> str:
         if "completed" in message:
             return "loading remaining checks"
         return "checking vulnerability advisories"
+    if message.startswith("guarddog: scanning "):
+        package = message.removeprefix("guarddog: scanning ")
+        return f"scanning {package}"
+    if message.startswith("guarddog: finished "):
+        package = message.removeprefix("guarddog: finished ")
+        return f"checked {package}"
+    if message == "guarddog: verifying generated dependency set":
+        return "verifying generated dependency set"
+    if message == "guarddog: verifying requirements.txt":
+        return "verifying requirements.txt"
     if message.startswith("guarddog:"):
         if "completed" in message:
             return "loading remaining checks"
         return "running malware heuristics"
+    if message.startswith("provenance: checking "):
+        package = message.removeprefix("provenance: checking ")
+        return f"checking {package}"
+    if message.startswith("provenance: finished "):
+        package = message.removeprefix("provenance: finished ")
+        return f"checked {package}"
     if message.startswith("provenance:"):
         if "completed" in message:
             return "completing scan"
@@ -510,3 +639,46 @@ def _summarize_progress(message: str) -> str:
             return "loading remaining provenance checks"
         return "checking package provenance"
     return ""
+
+
+def _echo_elapsed_time(started_at: float) -> None:
+    elapsed = time.perf_counter() - started_at
+    sys.stderr.write(f"{_green_arrow()} Completed in {_format_elapsed(elapsed)}\n")
+    sys.stderr.flush()
+
+
+def _format_elapsed(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.2f}s"
+    minutes, remainder = divmod(seconds, 60)
+    hours, minutes = divmod(int(minutes), 60)
+    if hours:
+        return f"{hours}h {minutes}m {remainder:.2f}s"
+    return f"{minutes}m {remainder:.2f}s"
+
+
+def _green_arrow() -> str:
+    arrow = "➜"
+    if sys.stderr.isatty():
+        return f"\033[32m{arrow}\033[0m"
+    return arrow
+
+
+def _spinner_line(frame: str, message: str, status: str) -> str:
+    base = f"{frame} {message}"
+    if status:
+        base += f" [{status}]"
+    base += "..."
+    return _truncate_to_width(base, _terminal_width())
+
+
+def _terminal_width() -> int:
+    return max(shutil.get_terminal_size(fallback=(80, 20)).columns, 20)
+
+
+def _truncate_to_width(text: str, width: int) -> str:
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[:width]
+    return text[: width - 3] + "..."

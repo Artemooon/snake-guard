@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Small uv-style project for snake-guard examples."
 requires-python = ">=3.10"
 dependencies = [
-  "httpx>=0.27,<1.0",
+  "httpx>=0.11.0,<1.0",
   "rich>=13.7,<14.0",
 ]
 
