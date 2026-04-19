@@ -2,7 +2,7 @@ name: snake-guard
 
 on:
   schedule:
-    - cron: "0 9 */3 * *"
+    - cron: "0 9 * * 1"
   workflow_dispatch:
 
 permissions:

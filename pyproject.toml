@@ -11,6 +11,21 @@ readme = "README.md"
 authors = [
     { name = "Artemooon" }
 ]
+classifiers = [
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Security",
+  "Topic :: Software Development :: Quality Assurance",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 requires-python = ">=3.10"
 dependencies = [
   "guarddog>=2.0",
@@ -33,3 +48,7 @@ package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
 include = ["snake_guard*"]
+
+[project.urls]
+homepage = "https://github.com/Artemooon/snake-guard/"
+issues = "https://github.com/Artemooon/snake-guard/issues"
