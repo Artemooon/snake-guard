@@ -16,6 +16,7 @@ signals, provenance issues, and safe remediation guidance in one place.
 - [Usage](#usage)
   - [Fix Plans](#fix-plans)
   - [Install Wrapper](#install-wrapper)
+  - [Cache](#cache)
   - [Sandbox](#sandbox)
   - [JSON Output](#json-output)
   - [Scheduled CI Scans](#scheduled-ci-scans)
@@ -101,6 +102,15 @@ snake-guard scan --root examples/poetry_project
 snake-guard scan --root examples/uv_project
 ```
 
+Use `--no-cache` when you want a fresh scan, fix, or install run without reusing
+cached scan results:
+
+```bash
+snake-guard scan --no-cache
+snake-guard fix --no-cache
+snake-guard install --no-cache
+```
+
 ## Fix Plans
 
 `snake-guard fix` separates real fixes from recommendations:
@@ -121,6 +131,31 @@ snake-guard fix --plan
 If no actions are required and every engine passed, the output says the project is
 good to go. If no actions are generated but an engine failed, the output makes
 that explicit so the result is not treated as clean.
+
+## Cache
+
+`snake-guard` stores scan results in a small JSON cache so repeated scans of the
+same dependency set can skip engines that already finished.
+
+The cache lives under:
+
+- `~/.cache/snake-guard/scan-cache.json`
+
+If `XDG_CACHE_HOME` is set, the cache file is stored there instead.
+
+Useful cache commands and flags:
+
+```bash
+snake-guard cache clear
+snake-guard scan --no-cache
+snake-guard fix --no-cache
+snake-guard install --no-cache
+```
+
+- `cache clear` deletes the persisted scan cache file.
+- `--no-cache` bypasses the scan cache for a single run.
+- `install` and `fix` pass the cache setting through to their internal scans, so
+  the full workflow can also run fresh when needed.
 
 ## Install Wrapper
 

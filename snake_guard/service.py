@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable
+from typing import Any
 
+from snake_guard.cache import ScanCache, build_scan_cache_key
 from snake_guard.engines import default_scan_engines
 from snake_guard.models import (
     Dependency,
@@ -19,14 +21,23 @@ from snake_guard.models import (
 from snake_guard.parsers import build_inventory
 from snake_guard.parsers.common import pinned_version_from_specifier
 
+_SCAN_CACHE = ScanCache()
 
-def scan_project(root: Path, progress_callback: Callable[[str], None] | None = None) -> ScanResult:
+
+def scan_project(
+    root: Path,
+    progress_callback: Callable[[str], None] | None = None,
+    *,
+    use_cache: bool = True,
+) -> ScanResult:
     inventory = build_inventory(root)
     if progress_callback is not None:
         progress_callback(
             f"inventory: found {len(inventory.direct_dependencies())} direct and {len(inventory.resolved_dependencies())} resolved dependencies"
         )
-    return scan_inventory(root, inventory, progress_callback=progress_callback)
+    return scan_inventory(
+        root, inventory, progress_callback=progress_callback, use_cache=use_cache
+    )
 
 
 def scan_dependencies(
@@ -34,19 +45,27 @@ def scan_dependencies(
     dependencies: list[Dependency],
     manifests: list[str] | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    *,
+    use_cache: bool = True,
 ) -> ScanResult:
-    inventory = Inventory(root=root, dependencies=dependencies, manifests=manifests or [])
+    inventory = Inventory(
+        root=root, dependencies=dependencies, manifests=manifests or []
+    )
     if progress_callback is not None:
         progress_callback(
             f"inventory: prepared {len(inventory.direct_dependencies())} direct dependencies from explicit input"
         )
-    return scan_inventory(root, inventory, progress_callback=progress_callback)
+    return scan_inventory(
+        root, inventory, progress_callback=progress_callback, use_cache=use_cache
+    )
 
 
 def scan_inventory(
     root: Path,
     inventory: Inventory,
     progress_callback: Callable[[str], None] | None = None,
+    *,
+    use_cache: bool = True,
 ) -> ScanResult:
     packages_by_name = _build_package_index(inventory.dependencies)
     issues: list[EngineIssue] = []
@@ -57,16 +76,37 @@ def scan_inventory(
     with ThreadPoolExecutor(max_workers=len(engines)) as executor:
         future_map = {}
         for engine in engines:
+            cache_key = None
+            if use_cache:
+                cache_key = build_scan_cache_key(
+                    engine.name, _inventory_cache_payload(inventory)
+                )
+                cached_result = _SCAN_CACHE.get(cache_key)
+                if cached_result is not None:
+                    if progress_callback is not None:
+                        progress_callback(f"{engine.name}: cache hit")
+                    engine_runs.append((engine.name, cached_result))
+                    continue
             if progress_callback is not None:
                 progress_callback(f"{engine.name}: started")
-            future_map[executor.submit(engine.run, root, inventory.dependencies, progress_callback)] = engine.name
+            future_map[
+                executor.submit(
+                    engine.run, root, inventory.dependencies, progress_callback
+                )
+            ] = (engine.name, cache_key)
         for future in as_completed(future_map):
-            engine_runs.append((future_map[future], future.result()))
+            engine_name, cache_key = future_map[future]
+            engine_result = future.result()
+            if use_cache and cache_key is not None:
+                _SCAN_CACHE.set(cache_key, engine_result)
+            engine_runs.append((engine_name, engine_result))
             if progress_callback is not None:
-                progress_callback(f"{future_map[future]}: completed")
+                progress_callback(f"{engine_name}: completed")
 
     for engine_name, (findings_by_package, engine_issues) in engine_runs:
-        engine_statuses.append(_engine_status(engine_name, findings_by_package, engine_issues))
+        engine_statuses.append(
+            _engine_status(engine_name, findings_by_package, engine_issues)
+        )
         issues.extend(engine_issues)
         for package_name, findings in findings_by_package.items():
             package = packages_by_name.get(package_name)
@@ -124,7 +164,9 @@ def _build_package_index(dependencies: list[Dependency]) -> dict[str, PackageRis
     for dependency in dependencies:
         key = dependency.name.lower()
         package = package_map.get(key)
-        candidate_version = dependency.resolved_version or _pinned_version(dependency.version_specifier)
+        candidate_version = dependency.resolved_version or _pinned_version(
+            dependency.version_specifier
+        )
         if package is None:
             package_map[key] = PackageRisk(
                 package=dependency.name,
@@ -132,7 +174,9 @@ def _build_package_index(dependencies: list[Dependency]) -> dict[str, PackageRis
                 direct=dependency.dependency_type == DependencyType.DIRECT,
             )
             continue
-        package.direct = package.direct or dependency.dependency_type == DependencyType.DIRECT
+        package.direct = (
+            package.direct or dependency.dependency_type == DependencyType.DIRECT
+        )
         if package.installed_version is None and candidate_version is not None:
             package.installed_version = candidate_version
     return package_map
@@ -146,13 +190,19 @@ def _compute_risk_level(findings: list[Finding]) -> str:
         return "critical"
     if FindingType.KNOWN_VULN in types:
         return "high"
-    if FindingType.MISSING_PROVENANCE in types or FindingType.MISSING_TRUSTED_PUBLISHING in types:
+    if (
+        FindingType.MISSING_PROVENANCE in types
+        or FindingType.MISSING_TRUSTED_PUBLISHING in types
+    ):
         return "medium"
     return "low"
 
 
 def _recommended_action(findings: list[Finding]) -> str:
-    has_fixable_vuln = any(finding.type == FindingType.KNOWN_VULN and finding.fixed_versions for finding in findings)
+    has_fixable_vuln = any(
+        finding.type == FindingType.KNOWN_VULN and finding.fixed_versions
+        for finding in findings
+    )
     if any(finding.type == FindingType.MALWARE_HEURISTIC for finding in findings):
         return "manual_review"
     if has_fixable_vuln:
@@ -178,3 +228,40 @@ def _risk_rank(risk_level: str) -> int:
         "low": 1,
         "info": 0,
     }.get(risk_level, 0)
+
+
+def _inventory_cache_payload(inventory: Inventory) -> dict[str, Any]:
+    dependencies = sorted(
+        (
+            _dependency_cache_payload(dependency)
+            for dependency in inventory.dependencies
+        ),
+        key=lambda item: (
+            item["name"],
+            item["dependency_type"],
+            item.get("source_file") or "",
+            item.get("version_specifier") or "",
+            item.get("resolved_version") or "",
+            item.get("markers") or "",
+            tuple(item.get("extras", [])),
+        ),
+    )
+    return {
+        "manifests": sorted(inventory.manifests),
+        "warnings": sorted(inventory.warnings),
+        "dependencies": dependencies,
+    }
+
+
+def _dependency_cache_payload(dependency: Dependency) -> dict[str, Any]:
+    return {
+        "name": dependency.name,
+        "version_specifier": dependency.version_specifier,
+        "resolved_version": dependency.resolved_version,
+        "source_file": dependency.source_file,
+        "dependency_type": dependency.dependency_type.value,
+        "pinned": dependency.pinned,
+        "hash_pinned": dependency.hash_pinned,
+        "extras": dependency.extras,
+        "markers": dependency.markers,
+    }

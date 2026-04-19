@@ -13,6 +13,7 @@ from typing import TypeVar
 
 import typer
 
+from snake_guard.cache import ScanCache
 from snake_guard.installer import install_project
 from snake_guard.remediation import build_fix_plan
 from snake_guard.reporting import (
@@ -32,7 +33,9 @@ from snake_guard.service import scan_project
 
 app = typer.Typer(help="CLI dependency risk scanner for Python projects.")
 sandbox_app = typer.Typer(help="Run risky packages inside a locked-down container.")
+cache_app = typer.Typer(help="Manage the on-disk scan cache.")
 app.add_typer(sandbox_app, name="sandbox")
+app.add_typer(cache_app, name="cache")
 T = TypeVar("T")
 
 
@@ -104,6 +107,11 @@ def install(
     json_output: bool = typer.Option(
         False, "--json", help="Emit JSON instead of text."
     ),
+    no_cache: bool = typer.Option(
+        False,
+        "--no-cache",
+        help="Bypass the scan cache for this install run.",
+    ),
 ) -> None:
     installer_args = list(ctx.args)
     progress = _ProgressDisplay()
@@ -126,6 +134,7 @@ def install(
                 continue_on_sandbox_failure=continue_on_sandbox_failure,
                 dry_run=dry_run,
                 progress_callback=progress.log,
+                use_cache=not no_cache,
             ),
             progress,
         )
@@ -156,11 +165,18 @@ def scan(
     json_output: bool = typer.Option(
         False, "--json", help="Emit JSON instead of text."
     ),
+    no_cache: bool = typer.Option(
+        False,
+        "--no-cache",
+        help="Bypass the scan cache for this scan run.",
+    ),
 ) -> None:
     progress = _ProgressDisplay()
     result = _run_with_spinner(
         "Scanning dependencies",
-        lambda: scan_project(_resolve_root(root), progress_callback=progress.log),
+        lambda: scan_project(
+            _resolve_root(root), progress_callback=progress.log, use_cache=not no_cache
+        ),
         progress,
     )
     if verify_mode:
@@ -204,6 +220,11 @@ def fix(
     json_output: bool = typer.Option(
         False, "--json", help="Emit JSON instead of text."
     ),
+    no_cache: bool = typer.Option(
+        False,
+        "--no-cache",
+        help="Bypass the scan cache for this fix run.",
+    ),
 ) -> None:
     resolved_root = _resolve_root(root)
     progress = _ProgressDisplay()
@@ -211,7 +232,9 @@ def fix(
     try:
         result = _run_with_spinner(
             "Scanning dependencies",
-            lambda: scan_project(resolved_root, progress_callback=progress.log),
+            lambda: scan_project(
+                resolved_root, progress_callback=progress.log, use_cache=not no_cache
+            ),
             progress,
         )
         fix_plan, diff = _run_with_spinner(
@@ -239,6 +262,12 @@ def fix(
         raise typer.Exit(code=_exit_code_for_fix(fix_plan, result.engine_statuses))
     finally:
         _echo_elapsed_time(started_at)
+
+
+@cache_app.command("clear")
+def cache_clear() -> None:
+    ScanCache().clear()
+    typer.echo("Cleared scan cache.")
 
 
 @sandbox_app.command("probe")
@@ -553,6 +582,9 @@ class _ProgressDisplay:
             "provenance": "provenance",
         }
         for engine_name, label in scan_labels.items():
+            if message == f"{engine_name}: cache hit":
+                self._completed_scan_engines.add(engine_name)
+                return f"using cached {label}"
             if message == f"{engine_name}: completed":
                 self._completed_scan_engines.add(engine_name)
                 remaining = [
